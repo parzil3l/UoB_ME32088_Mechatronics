@@ -82,11 +82,13 @@ while True:
         frame = aruco.drawDetectedMarkers(frame, corners, ids)
 
         # Estimate the pose of each marker from its 4 detected corners
-        for i in range(len(corners)):
-            ok, rvec, tvec = cv2.solvePnP(marker_points, corners[i], CM, dist_coef, flags=cv2.SOLVEPNP_IPPE_SQUARE)
+        for ind, marker_id in enumerate(ids.flatten()):
+            ok, rvec, tvec = cv2.solvePnP(marker_points, corners[ind], CM, dist_coef, flags=cv2.SOLVEPNP_IPPE_SQUARE)
             if ok:
                 # Draw axis for each marker (axis length 10 mm)
                 frame = cv2.drawFrameAxes(frame, CM, dist_coef, rvec, tvec, 10)
+                x, y, z = tvec[0][0], tvec[1][0], tvec[2][0]
+                print(f"ID {marker_id}: x={x:.1f} y={y:.1f} z={z:.1f} mm")
 
     # Add the frame rate to the image
     cv2.putText(frame, f"CAMERA FPS: {fps:.2f}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)

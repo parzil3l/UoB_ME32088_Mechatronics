@@ -6,6 +6,7 @@ This script captures camera frames, displays color and grayscale images, and rep
 
 # This is the vision library OpenCV
 import cv2
+print("OpenCV version: ", cv2.__version__)
 import logging
 # This is a library for mathematical functions for python (used later)
 import numpy as np
@@ -34,10 +35,14 @@ logging.info(
 #Create two opencv named windows
 cv2.namedWindow("frame-image", cv2.WINDOW_AUTOSIZE)
 cv2.namedWindow("gray-image", cv2.WINDOW_AUTOSIZE)
+cv2.namedWindow("canny-image", cv2.WINDOW_AUTOSIZE)#for canny iamge
+cv2.namedWindow("blurred-canny-image", cv2.WINDOW_AUTOSIZE)#for blurred canny image
 
 #Position the windows next to each other
 cv2.moveWindow("frame-image",0,100)
 cv2.moveWindow("gray-image",640,100)
+cv2.moveWindow("canny_image", 50, 150)#for canny image
+cv2.moveWindow("blurred_canny_image", 50, 150)#for blurred canny image
 
 # Execute this continuously
 last_fps_log = time.perf_counter()
@@ -54,6 +59,9 @@ while(True):
     
     # Convert the image from the camera to Gray scale
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(gray, (5,5), 0)
+    canny_blurred = cv2.Canny(blurred, 100, 200)
+    canny = cv2.Canny(gray,100,200)
     
     # Display the original frame in a window
     cv2.imshow('frame-image',frame)
@@ -61,6 +69,12 @@ while(True):
     
     # Display the grey image in another window
     cv2.imshow('gray-image',gray)
+
+    # Display canny image in another window
+    cv2.imshow('canny-image', canny)
+
+    #Display blurred canny image in another window
+    cv2.imshow('blurred-canny-image', canny_blurred)
     
     # Stop the performance counter
     end = time.perf_counter()
