@@ -1,0 +1,247 @@
+"""
+This script detects ArUco markers and identifies whether
+each marker represents a ship or no ship.
+
+Assigned marker IDs:
+1, 22       -> SHIP
+4, 45, 17   -> NO SHIP
+
+@author: Your name
+"""
+
+import cv2
+import cv2.aruco as aruco
+import logging
+import time
+import socket
+import threading
+
+logging.basicConfig(level=logging.INFO)
+
+# TCP connection to Raspberry Pi
+TCP_IP = "138.38.227.115"
+TCP_PORT = 25000
+
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+logging.info("Socket successfully created")
+
+s.connect((TCP_IP, TCP_PORT))
+logging.info("Connected to Raspberry Pi")
+
+# Receive commands from Simulink
+COMMAND_PORT = 25001
+
+scan_active = threading.Event()
+
+def receive_commands():
+
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+
+    server.bind(("0.0.0.0", COMMAND_PORT))
+    server.listen(1)
+
+    logging.info("Waiting for Simulink commands...")
+
+    conn, addr = server.accept()
+    logging.info("Connected to Simulink: %s", addr)
+
+    with conn:
+        while True:
+
+            command = conn.recv(1)
+
+            if not command:
+                break
+            
+            logging.info("Received command byte: %d", command[0])
+            
+            if command[0] == 1:
+                scan_active.set()
+                logging.info("SCAN ACTIVATED")
+
+            elif command[0] == 0:
+                scan_active.clear()
+                logging.info("SCAN DEACTIVATED")
+
+    server.close()
+
+
+# Start command listener in background
+command_thread = threading.Thread(
+    target=receive_commands,
+    daemon=True
+)
+command_thread.start()
+
+# Define the marker IDs that represent ships
+ship_marker_ids = {1, 22}
+
+# Define the ArUco dictionary and parameters
+aruco_dict = aruco.getPredefinedDictionary(aruco.DICT_4X4_50)
+parameters = aruco.DetectorParameters()
+detector = aruco.ArucoDetector(aruco_dict, parameters)
+
+# Define a processing rate in seconds (4 frames per second)
+processing_period = 0.25
+
+# Create the camera window
+cv2.namedWindow("ArUco Ship Detection", cv2.WINDOW_AUTOSIZE)
+
+# Define Region of Interest
+roi_x1 = 850
+roi_y1 = 460
+roi_x2 = 1050
+roi_y2 = 660
+
+# Start capturing video
+cap = cv2.VideoCapture(0)
+
+if not cap.isOpened():
+    logging.error("Could not open camera 0")
+    raise SystemExit(1)
+
+logging.info("Camera 0 opened")
+
+# Set the starting time
+start_time = time.time()
+fps = 0
+last_logged_status = {}
+
+
+while True:
+
+    # Only process camera frames when Simulink sends 1
+    if not scan_active.is_set():
+        time.sleep(0.05)
+        continue
+
+    # Capture frame-by-frame
+    ret, frame = cap.read()
+
+    if not ret:
+        logging.error("Could not read a frame from camera 0; exiting")
+        break
+
+    output_value = 0
+
+    # Convert frame to grayscale
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+    # Detect ArUco markers
+    corners, ids, rejectedImgPoints = detector.detectMarkers(gray)
+
+    # If markers are detected
+    if len(corners) > 0:
+
+        # Draw detected markers
+        frame = aruco.drawDetectedMarkers(frame, corners, ids)
+
+        # Identify the status of each marker
+        for ind, marker_id in enumerate(ids.flatten()):
+
+            # Find the centre of the marker
+            centre_x = int(corners[ind][0][:, 0].mean())
+            centre_y = int(corners[ind][0][:, 1].mean())
+
+            # Check if marker centre is inside ROI
+            inside_roi = (
+                roi_x1 <= centre_x <= roi_x2 and
+                roi_y1 <= centre_y <= roi_y2
+            )
+
+            # Classify marker
+            if not inside_roi:
+                status = "OUTSIDE ROI"
+            elif int(marker_id) in ship_marker_ids:
+                status = "SHIP"
+            else:
+                status = "NO SHIP"
+
+            # Only valid ship detections activate the laser
+            if status == "SHIP":
+                output_value = 1
+
+            # Print result when detected status changes
+            if last_logged_status.get(int(marker_id)) != status:
+                logging.info("Marker ID %s: %s", marker_id, status)
+                last_logged_status[int(marker_id)] = status
+
+            # Display ROI status
+            if inside_roi:
+                cv2.putText(frame, "INSIDE ROI",
+                            (centre_x - 60, centre_y + 30),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+            else:
+                cv2.putText(frame, "OUTSIDE ROI",
+                            (centre_x - 60, centre_y + 30),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+
+            # Display marker ID and assigned status
+            cv2.putText(
+                frame,
+                f"ID {marker_id}: {status}",
+                (centre_x - 60, centre_y - 20),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.7,
+                (0, 255, 0) if status != "OUTSIDE ROI" else (0, 0, 255),
+                2
+            )
+
+    # Send output to Raspberry Pi EVERY frame, even if no marker is detected
+    data = bytes([output_value])
+    logging.info("Sending: %d", output_value)
+    s.sendall(data)
+
+    # Add the frame rate to the image
+    cv2.putText(
+        frame,
+        f"CAMERA FPS: {fps:.2f}",
+        (10, 30),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        1,
+        (0, 255, 0),
+        2
+    )
+
+    cv2.putText(
+        frame,
+        f"PROCESSING FPS: {1/processing_period:.2f}",
+        (10, 60),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        1,
+        (0, 255, 0),
+        2
+    )
+
+    # Draw ROI rectangle
+    cv2.rectangle(frame,
+                  (roi_x1, roi_y1),
+                  (roi_x2, roi_y2),
+                  (255, 0, 0), 2)
+
+    # Display the resulting frame
+    cv2.imshow("ArUco Ship Detection", frame)
+
+    # Break the loop on 'q' key press
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+
+    # Ensure a steady processing rate
+    elapsed_time = time.time() - start_time
+    fps = 1 / elapsed_time
+
+    if elapsed_time < processing_period:
+        time.sleep(processing_period - elapsed_time)
+
+    start_time = time.time()
+
+
+# Release the camera and close windows
+cap.release()
+cv2.destroyAllWindows()
+
+logging.info("Camera capture stopped")
+
+s.close()
+logging.info("TCP connection closed")
